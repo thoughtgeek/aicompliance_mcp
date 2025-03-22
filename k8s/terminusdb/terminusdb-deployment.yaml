@@ -1,0 +1,113 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: eu-ai-act
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: terminusdb-secrets
+  namespace: eu-ai-act
+type: Opaque
+stringData:
+  admin-password: root  # Change this in production
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eu-ai-act-config
+  namespace: eu-ai-act
+data:
+  TERMINUSDB_URL: "http://terminusdb.eu-ai-act.svc.cluster.local:6363"
+  VECTOR_DB_URL: "http://vector-db.eu-ai-act.svc.cluster.local:6333"
+  EMBEDDING_URL: "http://embedding-service.eu-ai-act.svc.cluster.local:8000"
+  LLM_URL: "http://llm-service.eu-ai-act.svc.cluster.local:8008"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: terminusdb-data
+  namespace: eu-ai-act
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: terminusdb
+  namespace: eu-ai-act
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: terminusdb
+  template:
+    metadata:
+      labels:
+        app: terminusdb
+    spec:
+      containers:
+      - name: terminusdb
+        image: terminusdb/terminusdb-server:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: TERMINUSDB_SERVER_PORT
+          value: "6363"
+        - name: TERMINUSDB_ADMIN_PASS
+          valueFrom:
+            secretKeyRef:
+              name: terminusdb-secrets
+              key: admin-password
+        - name: TERMINUSDB_AUTOLOGIN
+          value: "true"
+        ports:
+        - containerPort: 6363
+          name: http
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        volumeMounts:
+        - name: terminusdb-data
+          mountPath: /app/terminusdb/storage
+        livenessProbe:
+          httpGet:
+            path: /api/
+            port: 6363
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/
+            port: 6363
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+      volumes:
+      - name: terminusdb-data
+        persistentVolumeClaim:
+          claimName: terminusdb-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: terminusdb
+  namespace: eu-ai-act
+spec:
+  type: ClusterIP
+  ports:
+  - port: 6363
+    targetPort: 6363
+    protocol: TCP
+    name: http
+  selector:
+    app: terminusdb 

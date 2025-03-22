@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openrouter-config
+  namespace: eu-ai-act
+data:
+  OPENROUTER_BASE_URL: "https://openrouter.ai/api/v1"
+  EMBEDDING_MODEL: "openai/text-embedding-ada-002"
+  LLM_MODEL: "openai/gpt-3.5-turbo"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openrouter-secret
+  namespace: eu-ai-act
+type: Opaque
+data:
+  # This is the base64 encoded value of the OpenRouter API key
+  OPENROUTER_API_KEY: c2stb3ItdjEtZTk3NDgxMzQ1ZDRkNWUyYjFlNGMzZGQ0MDY1NzBkNTcwOTU2NDY1YzUzNTlhNGQ5ODllNWI2NTMyMTM5ZmE3ZA==
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: eu-ai-act
+spec:
+  selector:
+    matchLabels:
+      app: api-gateway
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+      - name: api-gateway
+        image: python:3.9-slim
+        envFrom:
+        - configMapRef:
+            name: openrouter-config
+        - secretRef:
+            name: openrouter-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: eu-ai-act
+spec:
+  selector:
+    app: api-gateway
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: ClusterIP 

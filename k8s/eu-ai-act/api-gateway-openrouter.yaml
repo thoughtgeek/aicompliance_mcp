@@ -1,0 +1,523 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eu-ai-act-config
+  namespace: eu-ai-act
+data:
+  # Use OpenRouter instead of local services
+  TERMINUSDB_URL: "http://terminusdb:6363"
+  VECTOR_DB_URL: "http://vector-db:6333"
+  OPENROUTER_BASE_URL: "https://openrouter.ai/api/v1"
+  EMBEDDING_MODEL: "openai/text-embedding-ada-002"
+  LLM_MODEL: "openai/gpt-3.5-turbo"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openrouter-secret
+  namespace: eu-ai-act
+type: Opaque
+data:
+  # This is the base64 encoded value of the OpenRouter API key
+  OPENROUTER_API_KEY: c2stb3ItdjEtZTk3NDgxMzQ1ZDRkNWUyYjFlNGMzZGQ0MDY1NzBkNTcwOTU2NDY1YzUzNTlhNGQ5ODllNWI2NTMyMTM5ZmE3ZA==
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: eu-ai-act
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+      - name: api-gateway
+        image: python:3.9-slim
+        imagePullPolicy: IfNotPresent
+        command:
+        - "bash"
+        - "-c"
+        - |
+          set -e
+          apt-get update && \
+          apt-get install -y --no-install-recommends git && \
+          apt-get clean && \
+          rm -rf /var/lib/apt/lists/*
+          
+          pip install --no-cache-dir fastapi==0.103.1 uvicorn==0.23.2 pydantic==2.3.0 httpx==0.24.1
+          
+          # Create app directory
+          mkdir -p /app
+          
+          # Copy the app.py file from the source repo or use the app code from the ConfigMap
+          # This example copies from a git repo
+          cd /app
+          
+          # Run the service
+          python -m uvicorn app:app --host 0.0.0.0 --port 8000
+        envFrom:
+        - configMapRef:
+            name: eu-ai-act-config
+        - secretRef:
+            name: openrouter-secret
+        ports:
+        - containerPort: 8000
+          name: http
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+      volumes:
+      - name: app-code
+        configMap:
+          name: api-gateway-code
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-gateway-code
+  namespace: eu-ai-act
+data:
+  app.py: |
+    #!/usr/bin/env python3
+    """
+    EU AI Act Compliance System - API Gateway with OpenRouter
+    A lightweight API Gateway that uses OpenRouter API for embeddings and LLM
+    """
+
+    import os
+    import logging
+    import asyncio
+    import time
+    from typing import List, Dict, Any, Optional, Union
+    from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
+    from pydantic import BaseModel, Field
+    import httpx
+
+    # Setup logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    logger = logging.getLogger("api-gateway")
+
+    # Service URLs from environment variables with defaults for local development
+    TERMINUSDB_URL = os.environ.get("TERMINUSDB_URL", "http://terminusdb:6363")
+    VECTOR_DB_URL = os.environ.get("VECTOR_DB_URL", "http://vector-db:6333")
+    
+    # OpenRouter configuration
+    OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+    EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "openai/text-embedding-ada-002")
+    LLM_MODEL = os.environ.get("LLM_MODEL", "openai/gpt-3.5-turbo")
+
+    # Initialize the API gateway
+    app = FastAPI(
+        title="EU AI Act Compliance API Gateway",
+        description="API Gateway for EU AI Act Compliance System using OpenRouter",
+        version="1.0.0"
+    )
+
+    # Add CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # Shared state for monitoring component status
+    state = {
+        "ready": False,
+        "component_status": {
+            "terminusdb": False,
+            "vector_db": False,
+            "embedding": False,
+            "llm": False
+        },
+        "startup_time": time.time(),
+        "requests_processed": 0,
+        "successful_requests": 0,
+        "failed_requests": 0,
+        "total_processing_time": 0,
+    }
+
+    # Model definitions
+    class Document(BaseModel):
+        id: str
+        content: str
+        score: Optional[float] = None
+        source: Optional[str] = None
+        type: Optional[str] = None
+        metadata: Optional[Dict[str, Any]] = None
+
+    class QueryRequest(BaseModel):
+        query: str
+        max_results: Optional[int] = 5
+        min_score: Optional[float] = 0.6
+        filter: Optional[Dict[str, Any]] = None
+
+    class ComplianceQueryRequest(BaseModel):
+        query: str
+        max_results: Optional[int] = 5
+        min_score: Optional[float] = 0.6
+        temperature: Optional[float] = 0.1
+        filter: Optional[Dict[str, Any]] = None
+
+    class HealthResponse(BaseModel):
+        status: str
+        components: Dict[str, bool]
+        uptime: float
+        requests_processed: int
+
+    # HTTP client
+    async def get_http_client():
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            yield client
+
+    # OpenRouter Embedding function
+    async def generate_embeddings(texts: List[str], client: httpx.AsyncClient) -> List[List[float]]:
+        """Generate embeddings using OpenRouter API"""
+        if not OPENROUTER_API_KEY:
+            logger.error("OpenRouter API key not configured")
+            raise HTTPException(status_code=500, detail="Embedding service not configured")
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "HTTP-Referer": "https://eu-ai-act-compliance.com"
+        }
+        
+        try:
+            payload = {
+                "model": EMBEDDING_MODEL,
+                "input": texts
+            }
+            
+            response = await client.post(
+                f"{OPENROUTER_BASE_URL}/embeddings", 
+                json=payload, 
+                headers=headers
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"OpenRouter API error: {response.text}")
+                raise HTTPException(status_code=response.status_code, detail=f"Embedding generation failed: {response.text}")
+                
+            result = response.json()
+            return [data["embedding"] for data in result["data"]]
+            
+        except Exception as e:
+            logger.error(f"Error generating embeddings: {e}")
+            raise HTTPException(status_code=500, detail=f"Embedding generation failed: {str(e)}")
+
+    # OpenRouter LLM function
+    async def generate_llm_response(prompt: str, documents: List[Document], client: httpx.AsyncClient, temperature: float = 0.1) -> Dict[str, Any]:
+        """Generate LLM response using OpenRouter API"""
+        if not OPENROUTER_API_KEY:
+            logger.error("OpenRouter API key not configured")
+            raise HTTPException(status_code=500, detail="LLM service not configured")
+        
+        # Format system message with documents if provided
+        system_message = "You are a helpful AI assistant specialized in EU AI Act compliance questions. Provide accurate information based on the following context."
+        if documents:
+            system_message += "\n\nContext:"
+            for doc in documents:
+                system_message += f"\n\n--- Document ID: {doc.id} ---\n{doc.content}\n---"
+        
+        # Format the messages
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt}
+        ]
+        
+        # Prepare the request
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "HTTP-Referer": "https://eu-ai-act-compliance.com"
+        }
+        
+        payload = {
+            "model": LLM_MODEL,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": 2000
+        }
+        
+        try:
+            response = await client.post(
+                f"{OPENROUTER_BASE_URL}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=60.0
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"OpenRouter API error: {response.status_code} - {response.text}")
+                raise HTTPException(status_code=response.status_code, detail=f"LLM generation failed: {response.text}")
+            
+            result = response.json()
+            return {
+                "text": result["choices"][0]["message"]["content"],
+                "model": result.get("model", LLM_MODEL),
+                "provider": "openrouter"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating LLM response: {e}")
+            raise HTTPException(status_code=500, detail=f"LLM generation failed: {str(e)}")
+
+    # Background task to check components health
+    @app.on_event("startup")
+    async def startup_event():
+        # Start a background task to periodically check component health
+        asyncio.create_task(check_components_health())
+
+    async def check_components_health():
+        """Periodically check health of all components"""
+        while True:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    # Check TerminusDB
+                    try:
+                        resp = await client.get(f"{TERMINUSDB_URL}/api/")
+                        state["component_status"]["terminusdb"] = resp.status_code == 200
+                    except:
+                        state["component_status"]["terminusdb"] = False
+                    
+                    # Check Vector DB
+                    try:
+                        resp = await client.get(f"{VECTOR_DB_URL}/")
+                        state["component_status"]["vector_db"] = resp.status_code == 200
+                    except:
+                        state["component_status"]["vector_db"] = False
+                    
+                    # Check OpenRouter access
+                    if OPENROUTER_API_KEY:
+                        # Check embedding endpoint
+                        try:
+                            headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
+                            resp = await client.get(f"{OPENROUTER_BASE_URL}/models", headers=headers)
+                            state["component_status"]["embedding"] = resp.status_code == 200
+                            state["component_status"]["llm"] = resp.status_code == 200
+                        except:
+                            state["component_status"]["embedding"] = False
+                            state["component_status"]["llm"] = False
+                    else:
+                        state["component_status"]["embedding"] = False
+                        state["component_status"]["llm"] = False
+                    
+                    # Update overall readiness - require at least DB and either embedding or LLM
+                    state["ready"] = (state["component_status"]["terminusdb"] and 
+                                    state["component_status"]["vector_db"] and
+                                    (state["component_status"]["embedding"] or 
+                                    state["component_status"]["llm"]))
+                    
+                    logger.info(f"Component health check: {state['component_status']}")
+            except Exception as e:
+                logger.error(f"Error checking component health: {e}")
+            
+            # Wait before checking again
+            await asyncio.sleep(30)
+
+    # Routes
+    @app.get("/")
+    async def root():
+        """Root endpoint with service info"""
+        return {
+            "service": "EU AI Act Compliance API Gateway",
+            "version": "1.0.0",
+            "description": "API Gateway for EU AI Act Compliance System using OpenRouter",
+            "status": "ready" if state["ready"] else "initializing",
+            "components": state["component_status"],
+            "uptime": time.time() - state["startup_time"],
+            "requests_processed": state["requests_processed"]
+        }
+
+    @app.get("/health", response_model=HealthResponse)
+    async def health():
+        """Health check endpoint"""
+        return HealthResponse(
+            status="healthy" if state["ready"] else "unhealthy",
+            components=state["component_status"],
+            uptime=time.time() - state["startup_time"],
+            requests_processed=state["requests_processed"]
+        )
+
+    @app.post("/query")
+    async def query(request: QueryRequest, client: httpx.AsyncClient = Depends(get_http_client)):
+        """Semantic search endpoint using Vector DB and Embeddings"""
+        state["requests_processed"] += 1
+        start_time = time.time()
+        
+        try:
+            # Generate embeddings for the query using OpenRouter
+            query_embedding = await generate_embeddings([request.query], client)
+            
+            # Search vector database
+            search_payload = {
+                "vector": query_embedding[0],
+                "limit": request.max_results,
+                "with_payload": True,
+                "score_threshold": request.min_score
+            }
+            
+            if request.filter:
+                search_payload["filter"] = request.filter
+            
+            vector_resp = await client.post(
+                f"{VECTOR_DB_URL}/collections/eu_ai_act/points/search",
+                json=search_payload
+            )
+            
+            if vector_resp.status_code != 200:
+                raise HTTPException(status_code=vector_resp.status_code, detail="Vector search failed")
+                
+            results = vector_resp.json()
+            
+            # Convert results to Document format
+            documents = []
+            for match in results.get("result", []):
+                doc = Document(
+                    id=match.get("id", "unknown"),
+                    content=match.get("payload", {}).get("content", ""),
+                    score=match.get("score"),
+                    source=match.get("payload", {}).get("source"),
+                    type=match.get("payload", {}).get("type"),
+                    metadata=match.get("payload", {}).get("metadata", {})
+                )
+                documents.append(doc)
+            
+            state["successful_requests"] += 1
+            state["total_processing_time"] += time.time() - start_time
+            
+            return {
+                "query": request.query,
+                "results": documents,
+                "processing_time": time.time() - start_time
+            }
+            
+        except Exception as e:
+            state["failed_requests"] += 1
+            logger.error(f"Error processing query: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/compliance/query")
+    async def compliance_query(
+        request: ComplianceQueryRequest,
+        client: httpx.AsyncClient = Depends(get_http_client)
+    ):
+        """Compliance query endpoint that searches and generates an LLM response"""
+        state["requests_processed"] += 1
+        start_time = time.time()
+        
+        try:
+            # First, perform vector search to retrieve relevant documents
+            query_embedding = await generate_embeddings([request.query], client)
+            
+            # Search vector database
+            search_payload = {
+                "vector": query_embedding[0],
+                "limit": request.max_results,
+                "with_payload": True,
+                "score_threshold": request.min_score
+            }
+            
+            if request.filter:
+                search_payload["filter"] = request.filter
+            
+            vector_resp = await client.post(
+                f"{VECTOR_DB_URL}/collections/eu_ai_act/points/search",
+                json=search_payload
+            )
+            
+            if vector_resp.status_code != 200:
+                raise HTTPException(status_code=vector_resp.status_code, detail="Vector search failed")
+                
+            results = vector_resp.json()
+            
+            # Convert results to Document format
+            documents = []
+            for match in results.get("result", []):
+                doc = Document(
+                    id=match.get("id", "unknown"),
+                    content=match.get("payload", {}).get("content", ""),
+                    score=match.get("score"),
+                    source=match.get("payload", {}).get("source"),
+                    type=match.get("payload", {}).get("type"),
+                    metadata=match.get("payload", {}).get("metadata", {})
+                )
+                documents.append(doc)
+            
+            # Then, generate LLM response using OpenRouter
+            llm_response = await generate_llm_response(
+                prompt=request.query,
+                documents=documents,
+                client=client,
+                temperature=request.temperature or 0.1
+            )
+            
+            state["successful_requests"] += 1
+            state["total_processing_time"] += time.time() - start_time
+            
+            return {
+                "query": request.query,
+                "response": llm_response["text"],
+                "model": llm_response["model"],
+                "provider": llm_response["provider"],
+                "documents": documents,
+                "processing_time": time.time() - start_time
+            }
+            
+        except Exception as e:
+            state["failed_requests"] += 1
+            logger.error(f"Error processing compliance query: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    if __name__ == "__main__":
+        import uvicorn
+        uvicorn.run("app:app", host="0.0.0.0", port=8000, log_level="info")
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: eu-ai-act
+spec:
+  selector:
+    app: api-gateway
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: ClusterIP 

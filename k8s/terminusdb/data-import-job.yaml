@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: eu-ai-act-data-import
+  namespace: eu-ai-act
+spec:
+  template:
+    spec:
+      containers:
+      - name: data-importer
+        image: python:3.9-slim
+        imagePullPolicy: IfNotPresent
+        command:
+        - "bash"
+        - "-c"
+        - |
+          set -e
+          apt-get update && apt-get install -y git
+          pip install terminusdb-client
+          git clone https://github.com/your-repo/eu-ai-act-compliance /app
+          cd /app
+          python src/data_import/import_euaiact_data.py
+        env:
+        - name: TERMINUSDB_URL
+          valueFrom:
+            configMapKeyRef:
+              name: eu-ai-act-config
+              key: TERMINUSDB_URL
+        - name: TERMINUSDB_USER
+          value: "admin"
+        - name: TERMINUSDB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: terminusdb-secrets
+              key: admin-password
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+      restartPolicy: OnFailure
+  backoffLimit: 3 

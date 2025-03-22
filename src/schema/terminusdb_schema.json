@@ -1,0 +1,206 @@
+{
+  "@context": {
+    "@base": "terminusdb:///data/",
+    "@schema": "terminusdb:///schema#",
+    "@type": "@context"
+  },
+  "@type": "Class",
+  "@id": "AIActSchema",
+  "AISystem": {
+    "@type": "Class",
+    "@key": {
+      "@type": "Lexical",
+      "@fields": ["id"]
+    },
+    "id": "xsd:string",
+    "name": "xsd:string",
+    "description": "xsd:string",
+    "riskCategory": {
+      "@type": "Optional",
+      "@class": "RiskCategory"
+    },
+    "requirements": {
+      "@type": "Set",
+      "@class": "Requirement"
+    },
+    "obligations": {
+      "@type": "Set",
+      "@class": "Obligation"
+    },
+    "assessments": {
+      "@type": "Set",
+      "@class": "ConformityAssessment"
+    }
+  },
+  "RiskCategory": {
+    "@type": "Class",
+    "@key": {
+      "@type": "Lexical",
+      "@fields": ["id"]
+    },
+    "id": "xsd:string",
+    "name": {
+      "@type": "Enum",
+      "@values": ["unacceptable", "high", "limited", "minimal"]
+    },
+    "description": "xsd:string",
+    "legalBasis": "xsd:string",
+    "citations": {
+      "@type": "Set",
+      "@class": "LegalCitation"
+    }
+  },
+  "Requirement": {
+    "@type": "Class",
+    "@key": {
+      "@type": "Lexical",
+      "@fields": ["id"]
+    },
+    "id": "xsd:string",
+    "title": "xsd:string",
+    "description": "xsd:string",
+    "category": "xsd:string",
+    "appliesTo": {
+      "@type": "Set",
+      "@class": "RiskCategory"
+    },
+    "citations": {
+      "@type": "Set",
+      "@class": "LegalCitation"
+    },
+    "documentation": {
+      "@type": "Set",
+      "@class": "Documentation"
+    }
+  },
+  "Obligation": {
+    "@type": "Class",
+    "@key": {
+      "@type": "Lexical",
+      "@fields": ["id"]
+    },
+    "id": "xsd:string",
+    "title": "xsd:string",
+    "description": "xsd:string",
+    "obligatedParty": {
+      "@type": "Set",
+      "@class": "Organization"
+    },
+    "appliesTo": {
+      "@type": "Set",
+      "@class": "RiskCategory"
+    },
+    "citations": {
+      "@type": "Set",
+      "@class": "LegalCitation"
+    },
+    "evidenceRequired": {
+      "@type": "Set",
+      "@class": "Evidence"
+    }
+  },
+  "ConformityAssessment": {
+    "@type": "Class",
+    "@key": {
+      "@type": "Lexical",
+      "@fields": ["id"]
+    },
+    "id": "xsd:string",
+    "title": "xsd:string",
+    "description": "xsd:string",
+    "assessmentType": "xsd:string",
+    "appliesTo": {
+      "@type": "Set",
+      "@class": "RiskCategory"
+    },
+    "citations": {
+      "@type": "Set",
+      "@class": "LegalCitation"
+    },
+    "requiredDocumentation": {
+      "@type": "Set",
+      "@class": "Documentation"
+    }
+  },
+  "Documentation": {
+    "@type": "Class",
+    "@key": {
+      "@type": "Lexical",
+      "@fields": ["id"]
+    },
+    "id": "xsd:string",
+    "title": "xsd:string",
+    "description": "xsd:string",
+    "documentType": "xsd:string",
+    "requiredContent": "xsd:string",
+    "citations": {
+      "@type": "Set",
+      "@class": "LegalCitation"
+    }
+  },
+  "Evidence": {
+    "@type": "Class",
+    "@key": {
+      "@type": "Lexical",
+      "@fields": ["id"]
+    },
+    "id": "xsd:string",
+    "title": "xsd:string",
+    "description": "xsd:string",
+    "evidenceType": "xsd:string",
+    "verificationMethod": "xsd:string",
+    "citations": {
+      "@type": "Set",
+      "@class": "LegalCitation"
+    }
+  },
+  "Organization": {
+    "@type": "Class",
+    "@key": {
+      "@type": "Lexical",
+      "@fields": ["id"]
+    },
+    "id": "xsd:string",
+    "name": "xsd:string",
+    "role": {
+      "@type": "Enum",
+      "@values": ["provider", "deployer", "importer", "distributor", "user", "regulator"]
+    },
+    "description": "xsd:string",
+    "obligations": {
+      "@type": "Set",
+      "@class": "Obligation"
+    }
+  },
+  "LegalCitation": {
+    "@type": "Class",
+    "@key": {
+      "@type": "Lexical",
+      "@fields": ["id"]
+    },
+    "id": "xsd:string",
+    "article": "xsd:string",
+    "paragraph": "xsd:string",
+    "text": "xsd:string",
+    "sourceUrl": "xsd:string"
+  },
+  "FAQ": {
+    "@type": "Class",
+    "@key": {
+      "@type": "Lexical",
+      "@fields": ["id"]
+    },
+    "id": "xsd:string",
+    "question": "xsd:string",
+    "answer": "xsd:string",
+    "category": "xsd:string",
+    "citations": {
+      "@type": "Set",
+      "@class": "LegalCitation"
+    },
+    "relatedRequirements": {
+      "@type": "Set",
+      "@class": "Requirement"
+    }
+  }
+} 
