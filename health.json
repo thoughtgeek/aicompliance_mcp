@@ -1,1 +1,0 @@
-{"status":"unhealthy","components":{"terminusdb":true,"vector_db":true,"embedding":false,"llm":true},"uptime":1742609892.5507429,"requests_processed":0}
