@@ -1,114 +1,149 @@
-from unstructured.partition.pdf import partition_pdf
-from unstructured.documents.elements import Element, Title
+import PyPDF2
 import re
 from typing import List, Dict, Any
 import logging
 
-# Setup logging
+# Setup logging if not configured elsewhere
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class EUAIActProcessor:
-    """Processes the EU AI Act PDF to extract structured articles and paragraphs."""
+    """Processes the EU AI Act PDF using PyPDF2 to extract structured articles.
+
+    Note: This implementation is simpler than using unstructured and might be less
+    robust for complex layouts or scanned PDFs.
+    """
     def __init__(self, file_path: str):
         if not file_path:
             raise ValueError("File path cannot be empty.")
         self.file_path = file_path
-        logging.info(f"Initialized EUAIActProcessor with file: {file_path}")
+        self.logger = logging.getLogger(__name__) # Use standard logging
+        self.logger.info(f"Initialized EUAIActProcessor (PyPDF2) with file: {file_path}")
 
     def process(self) -> List[Dict[str, Any]]:
-        """Parses the PDF document and returns a list of structured articles."""
-        logging.info(f"Starting PDF processing for {self.file_path}")
-        try:
-            # Using hi_res strategy for better table and layout detection if needed
-            # Consider adding language="eng" if specifically targeting English docs
-            elements: List[Element] = partition_pdf(
-                self.file_path,
-                strategy="hi_res",
-                infer_table_structure=True,
-                languages=['eng'] # Explicitly setting language
-            )
-            logging.info(f"Partitioned PDF using 'hi_res' strategy. Found {len(elements)} elements.")
-        except ImportError:
-             logging.warning("`unstructured[local-inference]` or `unstructured[easy-ocr]` dependencies not found. Cannot use 'hi_res'. Falling back.")
-             elements = partition_pdf(self.file_path, strategy="fast")
-             logging.info(f"Partitioned PDF using 'fast' strategy. Found {len(elements)} elements.")
-        except Exception as e:
-            logging.error(f"Error partitioning PDF with 'hi_res': {e}")
-            # Fallback to basic strategy if hi_res fails
-            try:
-                logging.info("Falling back to 'fast' partitioning strategy.")
-                elements: List[Element] = partition_pdf(self.file_path, strategy="fast")
-                logging.info(f"Partitioned PDF using 'fast' strategy. Found {len(elements)} elements.")
-            except Exception as fallback_e:
-                 logging.exception("Failed to partition PDF with both 'hi_res' and 'fast' strategies.")
-                 raise RuntimeError(f"PDF partitioning failed: {fallback_e}") from fallback_e
+        """Process EU AI Act document and extract structured articles using PyPDF2"""
+        self.logger.info(f"Processing EU AI Act with PyPDF2: {self.file_path}")
 
         articles: List[Dict[str, Any]] = []
         current_article: Dict[str, Any] | None = None
+        full_doc_text = ""
 
-        for element in elements:
-            element_text = element.text.strip()
-            if not element_text:
-                continue
+        try:
+            with open(self.file_path, 'rb') as file:
+                reader = PyPDF2.PdfReader(file)
+                self.logger.info(f"PDF has {len(reader.pages)} pages.")
 
-            # Detect article headers (typically marked as Title)
-            # Regex adjusted to be case-insensitive and handle potential variations
-            article_match = re.match(r'Article\s+(\d+)\s*[:\-–—]?\s*(.*)', element_text, re.IGNORECASE)
+                # Extract text from all pages first
+                for page_num in range(len(reader.pages)):
+                    try:
+                        page = reader.pages[page_num]
+                        page_text = page.extract_text()
+                        if page_text:
+                            full_doc_text += page_text + "\n" # Add newline between pages
+                        else:
+                             self.logger.warning(f"Could not extract text from page {page_num + 1}")
+                    except Exception as page_exc:
+                         self.logger.error(f"Error processing page {page_num + 1}: {page_exc}")
 
-            # Check if element is a Title or if text strongly indicates an Article start
-            is_article_title = isinstance(element, Title) or (article_match and len(element_text) < 150) # Heuristic: Titles are usually short
+            if not full_doc_text:
+                 self.logger.error("Failed to extract any text from the PDF.")
+                 return []
 
-            if article_match and is_article_title:
-                if current_article:
-                    # Finalize the previous article
-                    current_article["content"] = "\\n\\n".join(current_article["content_parts"]) # Join with double newline for readability
-                    del current_article["content_parts"] # Remove temporary list
-                    articles.append(current_article)
-                    logging.debug(f"Completed processing Article {current_article['number']}")
+            # Process the extracted text line by line
+            lines = full_doc_text.split('\n')
+            paragraph_buffer = []
 
-                article_number = article_match.group(1)
-                # Capture potential title text after the article number
-                article_title_text = article_match.group(2).strip() if article_match.group(2) else element_text
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue # Skip empty lines
 
-                current_article = {
-                    "number": article_number,
-                    "title": article_title_text,
-                    "content_parts": [], # Temporary list to build full content
-                    "paragraphs": []
-                }
-                logging.info(f"Started processing Article {article_number}: {article_title_text}")
-                # Add title itself to content parts if needed, or handle separately
-                current_article["content_parts"].append(element_text)
+                # Detect article headers (might need refinement based on actual PDF format)
+                # This regex looks for "Article" followed by digits, potentially at the line start
+                article_match = re.match(r'Article\s+(\d+)\s*(.*)', line, re.IGNORECASE)
 
-            elif current_article:
-                # Add text content to the current article
-                current_article["content_parts"].append(element_text)
+                # Heuristic: Assume a line starting with "Article X" is a new article title
+                if article_match:
+                    if current_article:
+                        # Finalize previous article content
+                        current_article['content'] = "\n".join(current_article['content_parts'])
+                        del current_article['content_parts']
+                        articles.append(current_article)
 
-                # Check for numbered paragraphs at the beginning of the text element
-                # This assumes paragraphs start with '1.', '2.', etc. Optional leading parenthesis.
-                paragraph_match = re.match(r'^\s*(?:\()?(\d+)(?:\))?\.\s+', element_text)
-                if paragraph_match:
-                    paragraph_number = paragraph_match.group(1)
-                    # Store the paragraph text without the leading number/dot/parenthesis
-                    paragraph_text = re.sub(r'^\s*(?:\()?(\d+)(?:\))?\.\s*', '', element_text).strip()
-                    if paragraph_text: # Only add if there's actual text after the number
-                        current_article["paragraphs"].append({
-                            "number": paragraph_number,
-                            "text": paragraph_text # Store cleaned text
-                        })
-                        logging.debug(f"Added Paragraph {paragraph_number} to Article {current_article['number']}")
+                    article_number = article_match.group(1)
+                    article_title_text = article_match.group(2).strip() if article_match.group(2) else line
+                    self.logger.info(f"Found Article {article_number}: {article_title_text}")
 
-        # Add the last processed article
-        if current_article:
-            current_article["content"] = "\\n\\n".join(current_article["content_parts"])
-            if "content_parts" in current_article: # Ensure it exists before deleting
-                 del current_article["content_parts"]
-            articles.append(current_article)
-            logging.debug(f"Completed processing final Article {current_article['number']}")
+                    current_article = {
+                        "number": article_number,
+                        "title": article_title_text,
+                        "content_parts": [line], # Store lines to join later for full content
+                        "paragraphs": []
+                    }
+                    paragraph_buffer = [] # Reset buffer for new article
 
+                elif current_article:
+                    # Add line to the current article's full content parts
+                    current_article["content_parts"].append(line)
 
-        if not articles:
-             logging.warning("No articles were extracted. Check the PDF structure and parsing logic.")
-        else:
-             logging.info(f"Finished processing. Found {len(articles)} articles.")
-        return articles 
+                    # Check for numbered paragraphs (e.g., "1. ...", "(1)..." )
+                    paragraph_match = re.match(r'^\s*(?:\()?(\d+)(?:\))?\.\s+(.*)', line)
+                    if paragraph_match:
+                        # If we were buffering lines for a paragraph, store the previous one
+                        if paragraph_buffer:
+                             # Reconstruct paragraph text (simple join)
+                             para_text_reconstructed = " ".join(paragraph_buffer).strip()
+                             # Extract number from the *start* of the buffer if possible (more robust)
+                             prev_para_match = re.match(r'^\s*(?:\()?(\d+)(?:\))?\.\s+(.*)', paragraph_buffer[0])
+                             if prev_para_match:
+                                 prev_para_num = prev_para_match.group(1)
+                                 current_article["paragraphs"].append({
+                                     "number": prev_para_num,
+                                     "text": para_text_reconstructed
+                                 })
+                                 self.logger.debug(f"Stored buffered Paragraph {prev_para_num} in Article {current_article['number']}")
+
+                        # Start a new paragraph buffer with the current line
+                        paragraph_buffer = [line]
+
+                    elif paragraph_buffer:
+                         # If the line doesn't start a new numbered paragraph, append to buffer
+                         paragraph_buffer.append(line)
+                    # else: line is part of general content, not a numbered paragraph start
+
+            # Add the last buffered paragraph if any
+            if current_article and paragraph_buffer:
+                para_text_reconstructed = " ".join(paragraph_buffer).strip()
+                prev_para_match = re.match(r'^\s*(?:\()?(\d+)(?:\))?\.\s+(.*)', paragraph_buffer[0])
+                if prev_para_match:
+                    prev_para_num = prev_para_match.group(1)
+                    current_article["paragraphs"].append({
+                        "number": prev_para_num,
+                        "text": para_text_reconstructed
+                    })
+                    self.logger.debug(f"Stored final buffered Paragraph {prev_para_num} in Article {current_article['number']}")
+
+            # Add the last processed article
+            if current_article:
+                 current_article['content'] = "\n".join(current_article['content_parts'])
+                 if 'content_parts' in current_article: # Ensure deletion safety
+                     del current_article['content_parts']
+                 articles.append(current_article)
+
+            self.logger.info(f"Extracted {len(articles)} articles using PyPDF2.")
+            if not articles:
+                 self.logger.warning("No articles extracted. Check PDF content and parsing logic.")
+            # You might want to inspect the first few articles/paragraphs here for sanity check
+            # if articles:
+            #     self.logger.debug(f"First extracted article preview: {str(articles[0])[:500]}...")
+
+            return articles
+
+        except FileNotFoundError:
+            self.logger.exception(f"Error: PDF file not found at {self.file_path}")
+            raise
+        except PyPDF2.errors.PdfReadError as pdf_err:
+            self.logger.exception(f"Error reading PDF file {self.file_path}: {pdf_err}")
+            raise RuntimeError(f"Failed to read PDF: {pdf_err}") from pdf_err
+        except Exception as e:
+            self.logger.exception(f"An unexpected error occurred during PyPDF2 processing: {e}")
+            raise # Re-raise unexpected errors 

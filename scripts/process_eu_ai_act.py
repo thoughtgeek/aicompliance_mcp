@@ -87,4 +87,4 @@ def main(pdf_path: str = DEFAULT_PDF_PATH):
 if __name__ == "__main__":
     # Allows specifying a different PDF path via command line argument if needed
     pdf_file_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PDF_PATH
-    main(pdf_path=pdf_file_path) 
+    main(pdf_path=pdf_file_path)

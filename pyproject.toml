@@ -7,7 +7,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.9,<3.13"
-unstructured = {extras = ["pdf"], version = "^0.14.10"} # Added pdf extra for partition_pdf
+PyPDF2 = "^3.0.0" # Add PyPDF2 for PDF parsing
 pinecone-client = "^3.2.2" # Updated to v3 syntax
 sentence-transformers = "^2.7.0"
 neo4j = "^5.22.0"
@@ -22,6 +22,7 @@ python-multipart = "^0.0.9"
 mangum = "^0.17.0"  # For AWS Lambda integration
 openai = "^1.30.0" # Use OpenAI SDK instead of openrouter library
 langchain-openai = "^0.1.17" # Needed for some LangChain integrations, good to have
+transformers = ">=4.34.0,<4.36.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.1"

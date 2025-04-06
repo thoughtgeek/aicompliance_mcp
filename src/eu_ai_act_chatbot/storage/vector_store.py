@@ -59,7 +59,11 @@ class VectorStore:
 
     def _create_index_if_not_exists(self):
         """Creates the Pinecone index if it doesn't already exist."""
-        if VECTOR_INDEX_NAME not in self.pc.list_indexes().names:
+        # Get list of all indexes
+        indexes = self.pc.list_indexes()
+
+        # In Pinecone SDK v3, list_indexes() returns a list of index names directly
+        if VECTOR_INDEX_NAME not in indexes:
             logging.info(f"Index '{VECTOR_INDEX_NAME}' not found. Creating index...")
             try:
                 # Choose spec based on environment requirements (Serverless vs Pod-based)
