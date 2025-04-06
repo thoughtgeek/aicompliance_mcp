@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
+from typing import List
 from mangum import Mangum
 import logging
 import time

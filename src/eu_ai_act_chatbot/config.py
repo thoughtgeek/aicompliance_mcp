@@ -19,7 +19,7 @@ NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
 # Configuration
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
 VECTOR_INDEX_NAME = os.getenv("VECTOR_INDEX_NAME", "eu-ai-act")
-LLM_MODEL = os.getenv("LLM_MODEL", "anthropic/claude-3-5-sonnet")
+LLM_MODEL = os.getenv("LLM_MODEL", "meta-llama/llama-4-maverick:free")
 
 # Simple validation
 required_vars = [

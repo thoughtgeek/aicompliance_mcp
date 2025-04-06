@@ -89,8 +89,15 @@ class VectorStore:
                     time.sleep(5)
                 logging.info(f"Index '{VECTOR_INDEX_NAME}' created successfully.")
             except Exception as e:
-                logging.exception(f"Failed to create Pinecone index '{VECTOR_INDEX_NAME}'.")
-                raise RuntimeError("Index creation failed") from e
+                # Check if the error is 409 Conflict (index already exists)
+                if hasattr(e, 'status') and e.status == 409:
+                    logging.info(f"Index '{VECTOR_INDEX_NAME}' already exists. This is not an error.")
+                # Check for PineconeApiException with 409 error
+                elif 'PineconeApiException' in str(type(e)) and '409' in str(e):
+                    logging.info(f"Index '{VECTOR_INDEX_NAME}' already exists. This is not an error.")
+                else:
+                    logging.exception(f"Failed to create Pinecone index '{VECTOR_INDEX_NAME}'.")
+                    raise RuntimeError("Index creation failed") from e
         else:
             logging.info(f"Index '{VECTOR_INDEX_NAME}' already exists.")
 
