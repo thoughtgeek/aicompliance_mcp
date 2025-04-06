@@ -169,28 +169,24 @@ class KnowledgeGraph:
             return []
 
         logging.info(f"Performing graph search for keywords: {keywords} with limit {top_k}")
-        results = []
+        results = [] # Initialize results here to handle potential errors in execute_read
 
         # Using read transaction for safety
         try:
             with self.driver.session(database="neo4j") as session:
-                result: Result = session.execute_read(self._execute_keyword_search, keywords, top_k)
-                for record in result:
-                    results.append({
-                        "article": record["article"],
-                        "title": record["title"],
-                        "paragraph_number": record["paragraph_number"], # Include paragraph number
-                        "text": record["text"]
-                    })
+                # execute_read now returns the list directly from _execute_keyword_search
+                results = session.execute_read(self._execute_keyword_search, keywords, top_k)
+                # The loop 'for record in result:' is removed as results is now the list.
             logging.info(f"Graph search returned {len(results)} results.")
         except Exception as e:
+            # Log the exception, but return the potentially empty list 'results'
             logging.exception("Error during knowledge graph keyword search.")
 
-        return results
+        return results # Return the list obtained from execute_read or empty list on error
 
     @staticmethod
-    def _execute_keyword_search(tx: Transaction, keywords: List[str], limit: int) -> Result:
-        """Transaction function for executing the keyword search query."""
+    def _execute_keyword_search(tx: Transaction, keywords: List[str], limit: int) -> List[Dict[str, Any]]: # Changed return type hint
+        """Transaction function for executing the keyword search query and returning results as a list."""
         # Use parameterization for keywords to prevent injection vulnerabilities
         # Create a condition for each keyword using CONTAINS
         keyword_conditions = " OR ".join([f"p.text CONTAINS ${f'keyword_{i}'}" for i in range(len(keywords))])
@@ -207,7 +203,17 @@ class KnowledgeGraph:
             LIMIT $limit
         """
         logging.debug(f"Executing Cypher: {query} with params: {parameters}")
-        return tx.run(query, parameters)
+        result: Result = tx.run(query, parameters)
+        # Consume the result within the transaction and return a list of dictionaries
+        return [
+            {
+                "article": record["article"],
+                "title": record["title"],
+                "paragraph_number": record["paragraph_number"],
+                "text": record["text"]
+            }
+            for record in result
+        ]
 
     def get_article_content(self, article_number: str) -> Optional[Dict[str, Any]]:
         """Retrieves the full content (title and paragraphs) of a specific article."""
